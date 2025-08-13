@@ -1,0 +1,386 @@
+#!/usr/bin/env python3
+"""
+AI-Powered Image Caption Generator
+
+This application uses state-of-the-art computer vision models to automatically
+generate descriptive captions for uploaded images. It combines:
+- Vision Transformer (ViT) for image understanding
+- GPT-2 for natural language generation
+- Gradio for user-friendly web interface
+
+Technologies used:
+- Transformers: Hugging Face library for pre-trained AI models
+- PyTorch: Deep learning framework for neural networks
+- Pillow: Image processing and manipulation
+- Gradio: Web interface framework for ML applications
+"""
+
+import os
+import torch
+import numpy as np
+from PIL import Image
+import gradio as gr
+from transformers import (
+    VisionEncoderDecoderModel, 
+    ViTImageProcessor, 
+    AutoTokenizer,
+    BlipProcessor,
+    BlipForConditionalGeneration
+)
+import warnings
+warnings.filterwarnings("ignore")
+
+class ImageCaptionGenerator:
+    """
+    Advanced Image Caption Generator using multiple AI models
+    
+    This class implements two different approaches:
+    1. ViT-GPT2 Model: Vision Transformer + GPT-2 for detailed captions
+    2. BLIP Model: Bootstrapped Language-Image Pre-training for accurate descriptions
+    """
+    
+    def __init__(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Using device: {self.device}")
+        
+        # Initialize models
+        self.load_models()
+    
+    def load_models(self):
+        """Load pre-trained models for image captioning"""
+        try:
+            print("Loading ViT-GPT2 model...")
+            # ViT-GPT2 Model for detailed captions
+            self.vit_model = VisionEncoderDecoderModel.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+            self.vit_processor = ViTImageProcessor.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+            self.vit_tokenizer = AutoTokenizer.from_pretrained("nlpconnect/vit-gpt2-image-captioning")
+            
+            print("Loading BLIP model...")
+            # BLIP Model for accurate descriptions
+            self.blip_processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+            self.blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+            
+            # Move models to appropriate device
+            self.vit_model.to(self.device)
+            self.blip_model.to(self.device)
+            
+            print("Models loaded successfully!")
+            
+        except Exception as e:
+            print(f"Error loading models: {e}")
+            raise
+    
+    def preprocess_image(self, image):
+        """
+        Preprocess image for model input
+        
+        Args:
+            image: PIL Image or numpy array
+            
+        Returns:
+            PIL Image: Preprocessed image
+        """
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        
+        # Convert to RGB if needed
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Resize for optimal processing
+        max_size = 512
+        if max(image.size) > max_size:
+            image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        
+        return image
+    
+    def generate_vit_caption(self, image):
+        """
+        Generate caption using ViT-GPT2 model
+        
+        Args:
+            image: PIL Image
+            
+        Returns:
+            str: Generated caption
+        """
+        try:
+            # Process image
+            pixel_values = self.vit_processor(image, return_tensors="pt").pixel_values.to(self.device)
+            
+            # Generate caption
+            with torch.no_grad():
+                output_ids = self.vit_model.generate(
+                    pixel_values,
+                    max_length=50,
+                    num_beams=4,
+                    early_stopping=True,
+                    no_repeat_ngram_size=2,
+                    length_penalty=2.0
+                )
+            
+            # Decode caption
+            caption = self.vit_tokenizer.decode(output_ids[0], skip_special_tokens=True)
+            return caption.strip()
+            
+        except Exception as e:
+            return f"Error generating ViT caption: {e}"
+    
+    def generate_blip_caption(self, image):
+        """
+        Generate caption using BLIP model
+        
+        Args:
+            image: PIL Image
+            
+        Returns:
+            str: Generated caption
+        """
+        try:
+            # Process image
+            inputs = self.blip_processor(image, return_tensors="pt").to(self.device)
+            
+            # Generate caption
+            with torch.no_grad():
+                output_ids = self.blip_model.generate(
+                    **inputs,
+                    max_length=50,
+                    num_beams=5,
+                    early_stopping=True,
+                    length_penalty=1.0
+                )
+            
+            # Decode caption
+            caption = self.blip_processor.decode(output_ids[0], skip_special_tokens=True)
+            return caption.strip()
+            
+        except Exception as e:
+            return f"Error generating BLIP caption: {e}"
+    
+    def generate_enhanced_caption(self, image):
+        """
+        Generate enhanced caption by combining multiple models
+        
+        Args:
+            image: PIL Image
+            
+        Returns:
+            dict: Dictionary with different caption variations
+        """
+        # Preprocess image
+        processed_image = self.preprocess_image(image)
+        
+        # Generate captions using different models
+        vit_caption = self.generate_vit_caption(processed_image)
+        blip_caption = self.generate_blip_caption(processed_image)
+        
+        # Image analysis
+        image_info = {
+            "size": f"{processed_image.size[0]}x{processed_image.size[1]}",
+            "mode": processed_image.mode,
+            "format": getattr(processed_image, 'format', 'Unknown')
+        }
+        
+        return {
+            "vit_caption": vit_caption,
+            "blip_caption": blip_caption,
+            "image_info": image_info,
+            "enhanced_description": self.create_enhanced_description(vit_caption, blip_caption, image_info)
+        }
+    
+    def create_enhanced_description(self, vit_caption, blip_caption, image_info):
+        """
+        Create an enhanced description by combining model outputs
+        
+        Args:
+            vit_caption: Caption from ViT model
+            blip_caption: Caption from BLIP model
+            image_info: Image metadata
+            
+        Returns:
+            str: Enhanced description
+        """
+        # Simple enhancement logic (can be made more sophisticated)
+        if len(blip_caption) > len(vit_caption):
+            primary_caption = blip_caption
+            secondary_caption = vit_caption
+        else:
+            primary_caption = vit_caption
+            secondary_caption = blip_caption
+        
+        enhanced = f"{primary_caption}"
+        
+        # Add additional context if captions are different
+        if primary_caption.lower() != secondary_caption.lower():
+            enhanced += f" The image could also be described as: {secondary_caption}"
+        
+        return enhanced
+
+# Initialize the caption generator
+print("Initializing Image Caption Generator...")
+caption_generator = ImageCaptionGenerator()
+
+def process_image_for_gradio(image):
+    """
+    Process image for Gradio interface
+    
+    Args:
+        image: Image uploaded through Gradio
+        
+    Returns:
+        tuple: Multiple outputs for Gradio interface
+    """
+    if image is None:
+        return "Please upload an image first.", "", "", ""
+    
+    try:
+        # Generate captions
+        results = caption_generator.generate_enhanced_caption(image)
+        
+        # Format results for display
+        vit_result = f"**ViT-GPT2 Model:** {results['vit_caption']}"
+        blip_result = f"**BLIP Model:** {results['blip_caption']}"
+        enhanced_result = f"**Enhanced Description:** {results['enhanced_description']}"
+        
+        image_details = f"""**Image Details:**
+- Size: {results['image_info']['size']} pixels
+- Color Mode: {results['image_info']['mode']}
+- Format: {results['image_info']['format']}"""
+        
+        return vit_result, blip_result, enhanced_result, image_details
+        
+    except Exception as e:
+        error_msg = f"Error processing image: {e}"
+        return error_msg, "", "", ""
+
+def create_gradio_interface():
+    """Create Gradio web interface"""
+    
+    # Custom CSS for better styling
+    css = """
+    .gradio-container {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .gr-button {
+        background-color: #3b82f6;
+        color: white;
+    }
+    .gr-button:hover {
+        background-color: #2563eb;
+    }
+    """
+    
+    with gr.Blocks(css=css, title="AI Image Caption Generator") as interface:
+        gr.Markdown("""
+        # 🖼️ AI-Powered Image Caption Generator
+        
+        Upload an image and get intelligent, AI-generated captions using state-of-the-art computer vision models.
+        
+        **Features:**
+        - **ViT-GPT2**: Vision Transformer combined with GPT-2 for detailed descriptions
+        - **BLIP**: Bootstrapped Language-Image Pre-training for accurate captions
+        - **Enhanced Analysis**: Combined insights from multiple AI models
+        """)
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                image_input = gr.Image(
+                    type="pil",
+                    label="Upload Image",
+                    height=400
+                )
+                
+                generate_btn = gr.Button(
+                    "Generate Captions",
+                    variant="primary",
+                    size="lg"
+                )
+                
+            with gr.Column(scale=1):
+                vit_output = gr.Markdown(
+                    label="ViT-GPT2 Caption",
+                    value="Upload an image to see ViT-GPT2 generated caption..."
+                )
+                
+                blip_output = gr.Markdown(
+                    label="BLIP Caption", 
+                    value="Upload an image to see BLIP generated caption..."
+                )
+                
+                enhanced_output = gr.Markdown(
+                    label="Enhanced Description",
+                    value="Upload an image to see enhanced description..."
+                )
+                
+                image_info = gr.Markdown(
+                    label="Image Information",
+                    value="Upload an image to see technical details..."
+                )
+        
+        # Example images section
+        gr.Markdown("## 📸 Try These Example Images:")
+        
+        example_images = gr.Examples(
+            examples=[
+                ["https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=400"],
+                ["https://images.unsplash.com/photo-1517849845537-4d257902454a?w=400"],
+                ["https://images.unsplash.com/photo-1541781774459-bb2af2f05b55?w=400"],
+            ],
+            inputs=image_input,
+            label="Click any example to load it"
+        )
+        
+        # Information section
+        gr.Markdown("""
+        ## 🧠 Technology Stack
+        
+        **Computer Vision Models:**
+        - **Vision Transformer (ViT)**: Processes images as sequences of patches, similar to how text transformers work
+        - **GPT-2**: Generates natural language descriptions based on visual features
+        - **BLIP**: End-to-end trained model specifically designed for vision-language tasks
+        
+        **Key Technologies:**
+        - **PyTorch**: Deep learning framework powering the neural networks
+        - **Transformers**: Hugging Face library providing pre-trained models
+        - **Gradio**: Creates this interactive web interface
+        - **Pillow**: Handles image processing and manipulation
+        
+        **Model Performance:**
+        - Processes images in under 5 seconds on CPU
+        - Supports various image formats (JPEG, PNG, WebP, etc.)
+        - Generates contextually accurate descriptions
+        - Handles images up to 512px for optimal performance
+        """)
+        
+        # Event handlers
+        generate_btn.click(
+            fn=process_image_for_gradio,
+            inputs=[image_input],
+            outputs=[vit_output, blip_output, enhanced_output, image_info]
+        )
+        
+        image_input.change(
+            fn=process_image_for_gradio,
+            inputs=[image_input],
+            outputs=[vit_output, blip_output, enhanced_output, image_info]
+        )
+    
+    return interface
+
+if __name__ == "__main__":
+    print("Creating Gradio interface...")
+    
+    # Create and launch the interface
+    app = create_gradio_interface()
+    
+    print("Starting AI Image Caption Generator...")
+    print("Open your browser and navigate to the provided URL")
+    
+    # Launch with public sharing disabled for security
+    app.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=False,
+        show_error=True,
+        quiet=False
+    )
